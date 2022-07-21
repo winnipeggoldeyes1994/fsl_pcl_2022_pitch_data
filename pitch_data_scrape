@@ -1,0 +1,127 @@
+library(tidyverse)
+library(rvest)
+library(baseballr)
+
+#ADJUST GET_GAME_PKS_MLB FUNCTION FROM BASEBALLR
+game_pk_simple <- function (date, level_ids = c(1)) 
+{
+  api_call <- paste0("http://statsapi.mlb.com/api/v1/schedule?sportId=", 
+                     paste(level_ids, collapse = ","), "&date=", 
+                     date)
+  payload <- jsonlite::fromJSON(api_call, flatten = TRUE)
+  payload <- payload$dates$games %>% as.data.frame()
+  return(payload)
+}
+
+
+#CREATE VECTOR OF DATES TO SCRAPE
+dates <- seq(as_date("2022-04-01"), today(), by = "days")
+
+#CREATE VECTORS OF FSL AND PCL TEAMS FOR FILTERING
+fsl_2022 <- c("St. Lucie Mets", "Jupiter Hammerheads", "Daytona Tortugas",
+               "Palm Beach Cardinals", "Tampa Tarpons", "Bradenton Marauders",
+               "Fort Myers Mighty Mussels", "Dunedin Blue Jays", "Lakeland Flying Tigers",
+               "Clearwater Threshers")
+
+pcl_2022 <- c("Albuquerque Isotopes", "El Paso Chihuahuas", "Las Vegas Aviators",
+              "Oklahoma City Dodgers", "Reno Aces", "Round Rock Express",
+              "Sacramento River Cats", "Salt Lake Bees", "Sugar Land Space Cowboys",
+              "Tacoma Rainiers", "Charlotte Knights")
+
+#CREATE DUMMY LIST
+game_pks_list <- list()
+
+#LOOP ADJUSTED GAME_PK SCRAPER OVER DATES VECTOR
+for(i in seq_along(dates)){
+  r1 <- dates[i] %>% 
+    game_pk_simple(level_ids = c(11, 14))
+  game_pks_list[[i]] <- r1
+}
+
+#BIND ALL DATES AND FILTER OUT FSL AND PCL GAMES
+fsl_pcl_game_pks_2022 <- bind_rows(game_pks_list) %>% 
+  tibble() %>% 
+  filter(!status.detailedState %in% c("Cancelled", "Postponed")) %>% 
+  select(gamePk, teams.home.team.name) %>% 
+  filter(teams.home.team.name %in% c(fsl_2022, pcl_2022)) %>% 
+  unique()
+
+#CREATE DUMMY LIST
+fsl_pcl_list <- list()
+
+#LOOP PITCH DATA SCRAPER OVER FSL AND PCL GAME PKS
+for(i in seq_along(fsl_pcl_game_pks_2022$gamePk)){
+  r1 <- fsl_pcl_game_pks_2022$gamePk[i] %>% 
+    get_pbp_mlb()
+  fsl_pcl_list[[i]] <- r1
+}
+
+#BIND ALL PITCHES
+fsl_pcl_pitch_data_2022 <- bind_rows(fsl_pcl_list) %>% 
+  filter(isPitch == TRUE)
+
+#CLEAN VARIABLE NAMES
+fsl_pcl_pitch_data_2022 <- fsl_pcl_pitch_data_2022 %>% 
+  select(game_pk:pitchNumber, description = details.description, details.code, in_play = details.isInPlay,
+         strike = details.isStrike, ball = details.isBall, count_balls = count.balls.start, count_strikes = count.strikes.start,
+         count_outs = count.outs.start, id = player.id, sz_top = pitchData.strikeZoneTop, sz_bot = pitchData.strikeZoneBottom,
+         pitch_coord_x = pitchData.coordinates.x, pitch_coord_y = pitchData.coordinates.y, trajectory = hitData.trajectory,
+         hardness = hitData.hardness, hit_location = hitData.location, hit_coord_x = hitData.coordinates.coordX,
+         hit_coord_y = hitData.coordinates.coordY, event_type = details.eventType, at_bat_index = atBatIndex,
+         result_type = result.type, event = result.event, event_result = result.eventType, result_description = result.description,
+         result_away_score = result.awayScore, result_home_score = result.homeScore, half_inning = about.halfInning,
+         inning = about.inning, about_start_time = about.startTime, about_end_time = about.endTime, captivating_index = about.captivatingIndex,
+         count_balls_end = count.balls.end, count_strikes_end = count.strikes.end, count_outs_end = count.outs.end,
+         batter_id = matchup.batter.id, batter_name = matchup.batter.fullName, batter_hand = matchup.batSide.code,
+         pitcher_id = matchup.pitcher.id, pitcher_name = matchup.pitcher.fullName, pitcher_hand = matchup.pitchHand.code,
+         split_batter = matchup.splits.batter, split_pitcher = matchup.splits.pitcher, on_base = matchup.splits.menOnBase,
+         home_team:home_level_name, home_league_id:away_level_name, away_league_id:fielding_team, last_pitch = last.pitch.of.ab,
+         pfxId, pitch_type = details.type.code, details.type.description, release_speed = pitchData.startSpeed, end_speed = pitchData.endSpeed,
+         zone = pitchData.zone, pitch_type_confidence = pitchData.typeConfidence, plate_time = pitchData.plateTime,
+         extension = pitchData.extension, aY = pitchData.coordinates.aY, aZ = pitchData.coordinates.aZ,
+         pfx_x = pitchData.coordinates.pfxX, pfx_z = pitchData.coordinates.pfxZ, plate_x = pitchData.coordinates.pX,
+         plate_z = pitchData.coordinates.pZ, vx0 = pitchData.coordinates.vX0, vy0 = pitchData.coordinates.vY0,
+         vz0 = pitchData.coordinates.vZ0, x0 = pitchData.coordinates.x0, y0 = pitchData.coordinates.y0,
+         z0 = pitchData.coordinates.z0, ax = pitchData.coordinates.aX, break_angle = pitchData.breaks.breakAngle,
+         break_length = pitchData.breaks.breakLength, break_y = pitchData.breaks.breakY, spin_direction = pitchData.breaks.spinDirection,
+         release_spin = pitchData.breaks.spinRate, launch_speed = hitData.launchSpeed, launch_angle = hitData.launchAngle,
+         hit_distance = hitData.totalDistance) %>% 
+  mutate(pfx_x = pfx_x*1.51,
+         pfx_z = pfx_z*1.51,
+         pitch_type = recode(pitch_type, "FT" = "SI"),
+         pitch_type = fct_relevel(pitch_type, "FF", "SI", "FC", "SL", "CU", "CH"))
+
+#WRITE CSV
+write_csv(fsl_pcl_pitch_data_2022, "fsl_pcl_pitch_data_2022.csv")
+
+
+#SCRAPE AND MERGE CATCHERS FOR FRAMING ANALYSIS
+catcher_list <- list()
+
+for(i in seq_along(fsl_pcl_game_pks_2022$gamePk)) {
+  r1 <- fsl_pcl_game_pks_2022$gamePk[i] %>% 
+    get_batting_orders() %>% 
+    filter(abbreviation == "C") %>% 
+    select(catcher_id = id, catcher = fullName, catcher_team = teamName) %>% 
+    mutate(game_pk = fsl_pcl_game_pks_2022$gamePk[i])
+  catcher_list[[i]] <- r1
+}
+
+fsl_pcl_catchers <- bind_rows(catcher_list)
+
+#PRECHECK MERGE
+fsl_pcl_pitch_data_2022 %>% 
+  left_join(fsl_pcl_catchers, by = c("game_pk", "fielding_team" = "catcher_team")) %>% 
+  select(game_date, game_pk, fielding_team, catcher) %>% 
+  slice_sample(n = 5)
+
+#MERGE MASTER PITCH DATA SCRAPE WITH CATCHERS
+fsl_pcl_pitch_data_2022 <- fsl_pcl_pitch_data_2022 %>% 
+  left_join(fsl_pcl_catchers, by = c("game_pk", "fielding_team" = "catcher_team"))
+
+#WRITE MERGE CSV
+write_csv(fsl_pcl_pitch_data_2022, "~/fsl_pcl_frame_0720.csv")
+
+#CLEAR ENVIORONMENT
+remove(catcher_list, fsl_pcl_catchers, fsl_pcl_list, game_pks_list,
+       r1, dates, fsl_2022, i, pcl_2022, game_pk_simple, fsl_pcl_game_pks_2022)
